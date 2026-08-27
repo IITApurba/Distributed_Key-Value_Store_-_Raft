@@ -56,42 +56,43 @@ alone.
 
 ```mermaid
 flowchart TB
-    subgraph Clients
-        C1[Client A]
-        C2[Client B]
-        C3[Client N]
+    C1["Client A"]
+    C2["Client B"]
+    C3["Client N"]
+
+    HR["Consistent Hash Ring - shard routing"]
+
+    subgraph shard0["Shard 0 Raft group"]
+        N1["Node 1 - LEADER"]
+        N2["Node 2 - FOLLOWER"]
+        N3["Node 3 - FOLLOWER"]
+        N4["Node 4 - FOLLOWER"]
+        N5["Node 5 - FOLLOWER"]
+        N1 <--> N2
+        N1 <--> N3
+        N1 <--> N4
+        N1 <--> N5
     end
 
-    subgraph "Shard 0 (Raft group)"
-        N1[("Node 1<br/>LEADER")]
-        N2[("Node 2<br/>FOLLOWER")]
-        N3[("Node 3<br/>FOLLOWER")]
-        N4[("Node 4<br/>FOLLOWER")]
-        N5[("Node 5<br/>FOLLOWER")]
-        N1 <-->|AppendEntries / heartbeat| N2
-        N1 <-->|AppendEntries / heartbeat| N3
-        N1 <-->|AppendEntries / heartbeat| N4
-        N1 <-->|AppendEntries / heartbeat| N5
+    subgraph shard1["Shard 1 Raft group"]
+        M1["Node 1"]
+        M2["Node 2"]
+        M3["Node 3"]
+        M4["Node 4"]
+        M5["Node 5"]
     end
 
-    subgraph "Shard 1 (Raft group)"
-        M1[("Node 1")]
-        M2[("Node 2")]
-        M3[("Node 3")]
-        M4[("Node 4")]
-        M5[("Node 5")]
-    end
-
-    HR[["Consistent Hash Ring<br/>(shard routing)"]]
-
-    C1 -->|key hash| HR
-    C2 -->|key hash| HR
-    C3 -->|key hash| HR
+    C1 --> HR
+    C2 --> HR
+    C3 --> HR
     HR --> N1
     HR --> M1
-
-    N1 -.->|migrateRange<br/>(online, log-committed)| M1
+    N1 -.-> M1
 ```
+
+*Node-to-node arrows inside each shard are the Raft `AppendEntries`/heartbeat
+fan-out from the leader; the dashed arrow between shards is
+`ShardManager::migrateRange` moving a key range online.*
 
 Each shard is an **independent Raft group** — its own leader, its own
 log, its own WAL directory. A process hosts one `RaftNode` + one
@@ -148,15 +149,20 @@ Key correctness details actually implemented:
 
 ```mermaid
 flowchart LR
-    subgraph "wal-dir/"
-        HS[hardstate<br/>currentTerm + votedFor]
-        WAL[wal.log<br/>append-only LogEntry stream]
-        SNAP[snapshot.bin<br/>lastIncludedIndex + Term + KvStore bytes]
+    Append["appendAndSync()"]
+    Vote["setHardState()"]
+    Compact["compactUpTo()"]
+
+    subgraph waldir["wal-dir/"]
+        HS["hardstate: currentTerm + votedFor"]
+        WAL["wal.log: append-only LogEntry stream"]
+        SNAP["snapshot.bin: lastIncludedIndex + Term + KvStore bytes"]
     end
-    Append[appendAndSync] -->|fsync| WAL
-    Vote[setHardState] -->|atomic rename| HS
-    Compact[compactUpTo] -->|atomic rename| SNAP
-    Compact -->|drop entries ≤ snapshot index| WAL
+
+    Append -->|fsync| WAL
+    Vote -->|atomic rename| HS
+    Compact -->|atomic rename| SNAP
+    Compact -->|"drop entries at or before snapshot index"| WAL
 ```
 
 `src/raft/persistent_log.h`. Every `appendAndSync` call fsyncs before
@@ -200,23 +206,25 @@ the client library and the client-facing server's dispatch path.
 
 ```mermaid
 flowchart TB
-    subgraph "Client-facing path (KvServer)"
-        L[Listener socket] --> A[Accept thread]
-        A -->|round-robin| W1[epoll/kqueue worker 1]
-        A -->|round-robin| W2[epoll/kqueue worker 2]
-        A -->|round-robin| WN[epoll/kqueue worker N]
+    subgraph client_path["Client-facing path: KvServer"]
+        L["Listener socket"] --> A["Accept thread"]
+        A -->|round-robin| W1["epoll/kqueue worker 1"]
+        A -->|round-robin| W2["epoll/kqueue worker 2"]
+        A -->|round-robin| WN["epoll/kqueue worker N"]
     end
-    W1 --> RN[RaftNode::propose /<br/>linearizableReadBarrier]
+
+    RN["RaftNode: propose / linearizableReadBarrier"]
+    W1 --> RN
     W2 --> RN
     WN --> RN
 
-    subgraph "Peer path (TcpTransport)"
-        Q[bounded job queue] --> T1[worker thread 1]
-        Q --> T2[worker thread 8]
-        T1 --> Pool[(pooled connection<br/>per peer)]
+    subgraph peer_path["Peer path: TcpTransport"]
+        Q["bounded job queue"] --> T1["worker thread 1"]
+        Q --> T2["worker thread 8"]
+        T1 --> Pool["pooled connection per peer"]
         T2 --> Pool
     end
-    RN -->|AppendEntries/RequestVote fan-out| Q
+    RN -->|"AppendEntries / RequestVote fan-out"| Q
 ```
 
 - **Client path**: one listening socket, N independent epoll (Linux) /
