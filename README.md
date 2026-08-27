@@ -10,6 +10,11 @@ dependencies (no gRPC/protobuf) — POSIX sockets, epoll/kqueue, and a small
 hand-rolled binary wire format; builds with CMake + the standard library
 alone.
 
+> **Source layout:** all code lives under [`keyper-cpp/`](keyper-cpp/).
+> Every path referenced below (`src/...`, `tests/...`) is relative to that
+> directory — e.g. `src/raft/raft_node.cpp` means
+> `keyper-cpp/src/raft/raft_node.cpp`.
+
 > **On the numbers in this doc:** every metric below (throughput,
 > latency, recovery time, fuzz-run counts) is a **target figure with a
 > stated benchmark methodology**, not a number pulled from a completed
@@ -58,11 +63,11 @@ flowchart TB
     end
 
     subgraph "Shard 0 (Raft group)"
-        N1[("Node 1\nLEADER")]
-        N2[("Node 2\nFOLLOWER")]
-        N3[("Node 3\nFOLLOWER")]
-        N4[("Node 4\nFOLLOWER")]
-        N5[("Node 5\nFOLLOWER")]
+        N1[("Node 1<br/>LEADER")]
+        N2[("Node 2<br/>FOLLOWER")]
+        N3[("Node 3<br/>FOLLOWER")]
+        N4[("Node 4<br/>FOLLOWER")]
+        N5[("Node 5<br/>FOLLOWER")]
         N1 <-->|AppendEntries / heartbeat| N2
         N1 <-->|AppendEntries / heartbeat| N3
         N1 <-->|AppendEntries / heartbeat| N4
@@ -77,7 +82,7 @@ flowchart TB
         M5[("Node 5")]
     end
 
-    HR[["Consistent Hash Ring\n(shard routing)"]]
+    HR[["Consistent Hash Ring<br/>(shard routing)"]]
 
     C1 -->|key hash| HR
     C2 -->|key hash| HR
@@ -85,7 +90,7 @@ flowchart TB
     HR --> N1
     HR --> M1
 
-    N1 -.->|migrateRange\n(online, log-committed)| M1
+    N1 -.->|migrateRange<br/>(online, log-committed)| M1
 ```
 
 Each shard is an **independent Raft group** — its own leader, its own
@@ -105,10 +110,10 @@ stateDiagram-v2
     [*] --> Follower
     Follower --> Candidate: election timeout elapses
     Candidate --> Candidate: split vote / new election timeout
-    Candidate --> Follower: discovers higher term\n(RequestVote/AppendEntries reply)
+    Candidate --> Follower: discovers higher term<br/>(RequestVote/AppendEntries reply)
     Candidate --> Leader: receives majority votes
-    Leader --> Follower: discovers higher term\n(AppendEntries reply)
-    Follower --> Follower: valid AppendEntries from current leader\n(resets election deadline)
+    Leader --> Follower: discovers higher term<br/>(AppendEntries reply)
+    Follower --> Follower: valid AppendEntries from current leader<br/>(resets election deadline)
 ```
 
 Implemented in `src/raft/raft_node.{h,cpp}`. One background timer thread
@@ -144,9 +149,9 @@ Key correctness details actually implemented:
 ```mermaid
 flowchart LR
     subgraph "wal-dir/"
-        HS[hardstate\ncurrentTerm + votedFor]
-        WAL[wal.log\nappend-only LogEntry stream]
-        SNAP[snapshot.bin\nlastIncludedIndex + Term + KvStore bytes]
+        HS[hardstate<br/>currentTerm + votedFor]
+        WAL[wal.log<br/>append-only LogEntry stream]
+        SNAP[snapshot.bin<br/>lastIncludedIndex + Term + KvStore bytes]
     end
     Append[appendAndSync] -->|fsync| WAL
     Vote[setHardState] -->|atomic rename| HS
@@ -201,14 +206,14 @@ flowchart TB
         A -->|round-robin| W2[epoll/kqueue worker 2]
         A -->|round-robin| WN[epoll/kqueue worker N]
     end
-    W1 --> RN[RaftNode::propose /\nlinearizableReadBarrier]
+    W1 --> RN[RaftNode::propose /<br/>linearizableReadBarrier]
     W2 --> RN
     WN --> RN
 
     subgraph "Peer path (TcpTransport)"
         Q[bounded job queue] --> T1[worker thread 1]
         Q --> T2[worker thread 8]
-        T1 --> Pool[(pooled connection\nper peer)]
+        T1 --> Pool[(pooled connection<br/>per peer)]
         T2 --> Pool
     end
     RN -->|AppendEntries/RequestVote fan-out| Q
@@ -237,7 +242,7 @@ sequenceDiagram
     participant N2 as Node 2
     participant N3 as Node 3
     Note over N1: election timeout elapses
-    N1->>N1: currentTerm++, votedFor = self,\nrole = Candidate
+    N1->>N1: currentTerm++, votedFor = self,<br/>role = Candidate
     par
         N1->>N2: RequestVote(term, lastLogIndex, lastLogTerm)
     and
@@ -289,7 +294,7 @@ sequenceDiagram
     Client->>L: GET key
     L->>L: target = commitIndex (snapshot now)
     L->>L: broadcastAppendEntries() (heartbeat round)
-    Note over L: quorum ack proves leadership held\nsince target was recorded
+    Note over L: quorum ack proves leadership held<br/>since target was recorded
     L->>L: wait until lastApplied >= target
     L->>L: read key from KvStore
     L-->>Client: value (linearizable as of target)
@@ -316,7 +321,7 @@ sequenceDiagram
     PL-->>SM: restore(bytes)
     RN->>PL: replay wal.log entries after snapshotIndex
     RN->>SM: apply() each replayed entry in order
-    Note over RN: recovery cost = O(entries since last snapshot),\nnot O(total history)
+    Note over RN: recovery cost = O(entries since last snapshot),<br/>not O(total history)
 ```
 
 ### Online shard migration
@@ -336,7 +341,7 @@ sequenceDiagram
         Ops->>SFrom: propose Del(key) on A's log
         SFrom->>SFrom: replicate + commit on A's quorum
     end
-    Note over SFrom,STo: a client reading mid-migration always finds\nthe key on exactly one side — no dual-write window,\nno downtime
+    Note over SFrom,STo: a client reading mid-migration always finds<br/>the key on exactly one side — no dual-write window,<br/>no downtime
 ```
 
 ### Fault injection under partition
@@ -356,7 +361,7 @@ sequenceDiagram
     A->>B: RequestVote (now reachable)
     B-->>A: VoteGranted
     Note over A: majority reached -> new Leader
-    H->>H: assert liveness (leader elected) and safety\n(no two replicas disagree on a committed index)
+    H->>H: assert liveness (leader elected) and safety<br/>(no two replicas disagree on a committed index)
 ```
 
 ---
@@ -364,33 +369,34 @@ sequenceDiagram
 ## Repo layout
 
 ```
-src/
-  raft/            core consensus: election, replication, persistence, snapshotting, membership changes, read-index
-    types.h            LogEntry, ClusterConfig, KvCommand wire types
-    persistent_log.h   WAL + hard state + snapshot file, on-disk, fsync'd
-    raft_node.{h,cpp}  the state machine: Follower/Candidate/Leader, RPC handlers, propose/apply
-    rpc_messages.h     RequestVote/AppendEntries/InstallSnapshot/ReadIndex payloads
-    state_machine.h    interface applied state machines implement
-  kv/
-    kv_store.h         the replicated map; de-dupes retried client writes
-  shard/
-    hash_ring.h        consistent hashing (FNV-1a + virtual nodes)
-    shard_manager.h    owns one Raft group per shard, routes keys, online migration
-  net/
-    transport.h         abstract RPC transport RaftNode depends on
-    test_transport.h     in-process transport with fault injection (drop/delay/partition/duplicate/kill)
-    tcp_transport.h      real TCP peer transport, pooled connections, worker-thread dispatch
-    peer_server.h         accepts peer RPCs, multiplexed by shard id
-    event_loop.h          epoll (Linux) / kqueue (macOS) wrapper
-    wire.h                 frame format: [1B type][4B length][payload]
-  server/
-    kv_server.h           client-facing server: epoll/kqueue event loops, minimal critical sections
-    main.cpp              node process entry point
-  client/
-    client.h              client library: shard routing, connection pooling, leader-redirect retry
-tests/
-  test_main.cpp    election, replication, persistence/recovery, snapshot compaction,
-                   membership changes, linearizable reads, Jepsen-style fault injection
+keyper-cpp/
+  src/
+    raft/            core consensus: election, replication, persistence, snapshotting, membership changes, read-index
+      types.h            LogEntry, ClusterConfig, KvCommand wire types
+      persistent_log.h   WAL + hard state + snapshot file, on-disk, fsync'd
+      raft_node.{h,cpp}  the state machine: Follower/Candidate/Leader, RPC handlers, propose/apply
+      rpc_messages.h     RequestVote/AppendEntries/InstallSnapshot/ReadIndex payloads
+      state_machine.h    interface applied state machines implement
+    kv/
+      kv_store.h         the replicated map; de-dupes retried client writes
+    shard/
+      hash_ring.h        consistent hashing (FNV-1a + virtual nodes)
+      shard_manager.h    owns one Raft group per shard, routes keys, online migration
+    net/
+      transport.h         abstract RPC transport RaftNode depends on
+      test_transport.h     in-process transport with fault injection (drop/delay/partition/duplicate/kill)
+      tcp_transport.h      real TCP peer transport, pooled connections, worker-thread dispatch
+      peer_server.h         accepts peer RPCs, multiplexed by shard id
+      event_loop.h          epoll (Linux) / kqueue (macOS) wrapper
+      wire.h                 frame format: [1B type][4B length][payload]
+    server/
+      kv_server.h           client-facing server: epoll/kqueue event loops, minimal critical sections
+      main.cpp              node process entry point
+    client/
+      client.h              client library: shard routing, connection pooling, leader-redirect retry
+  tests/
+    test_main.cpp    election, replication, persistence/recovery, snapshot compaction,
+                     membership changes, linearizable reads, Jepsen-style fault injection
 ```
 
 ---
@@ -453,6 +459,7 @@ Running `./build/tests/keyper_tests` right now executes, and passes:
 ## Building & running
 
 ```sh
+cd keyper-cpp
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
 make -j
